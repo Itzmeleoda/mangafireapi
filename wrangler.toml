@@ -9,3 +9,8 @@ compatibility_date = "2026-08-01"
 
 [vars]
 # Non-secret config can go here.
+
+# Build the worker bundle before every deploy (Cloudflare Git builds run
+# only "npx wrangler deploy", so the build must be hooked in here).
+[build]
+command = "npm install --no-audit --no-fund && npm run worker:build"
