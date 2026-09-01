@@ -90,6 +90,7 @@ if (SCRAPER_KEY) {
       if (SCRAPER_RENDER) proxyUrl += '&js_render=true';
       if (SCRAPER_PREMIUM) proxyUrl += '&premium_proxy=true';
       if (SCRAPER_RENDER || SCRAPER_PREMIUM) proxyUrl += '&antibot=true';
+      proxyUrl += '&wait=5000'; // wait for MangaFire's JS to populate the page
     } else {
       proxyUrl = `http://api.scraperapi.com?api_key=${SCRAPER_KEY}&keep_headers=true&url=${url}`;
       if (SCRAPER_RENDER) proxyUrl += '&render=true';

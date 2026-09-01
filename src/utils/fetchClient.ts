@@ -102,6 +102,7 @@ function buildUrl(path: string): string {
       if (config.scraperRender) u += '&js_render=true';
       if (config.scraperPremium) u += '&premium_proxy=true';
       if (config.scraperRender || config.scraperPremium) u += '&antibot=true';
+      u += '&wait=5000'; // wait for MangaFire's JS to populate the page
       return u;
     }
     case 'scraperapi':
