@@ -85,9 +85,11 @@ if (SCRAPER_KEY) {
       if (SCRAPER_RENDER) proxyUrl += '&render_js=true';
       if (SCRAPER_PREMIUM) proxyUrl += '&premium_proxy=true';
     } else if (SCRAPER_PROVIDER === 'zenrows') {
+      // Verified-working anti-CF combo: js_render + antibot + premium_proxy
       proxyUrl = `https://api.zenrows.com/v1/?apikey=${SCRAPER_KEY}&url=${url}`;
       if (SCRAPER_RENDER) proxyUrl += '&js_render=true';
       if (SCRAPER_PREMIUM) proxyUrl += '&premium_proxy=true';
+      if (SCRAPER_RENDER || SCRAPER_PREMIUM) proxyUrl += '&antibot=true';
     } else {
       proxyUrl = `http://api.scraperapi.com?api_key=${SCRAPER_KEY}&keep_headers=true&url=${url}`;
       if (SCRAPER_RENDER) proxyUrl += '&render=true';
@@ -97,7 +99,7 @@ if (SCRAPER_KEY) {
     return config;
   });
   console.log(
-    `[axiosClient] ScraperAPI enabled (render=${SCRAPER_RENDER}, premium=${SCRAPER_PREMIUM}, keep_headers=true)`
+    `[axiosClient] Proxy enabled (provider=${SCRAPER_PROVIDER}, render=${SCRAPER_RENDER}, premium=${SCRAPER_PREMIUM})`
   );
 } else {
   console.log('[axiosClient] Direct mode (no SCRAPER_API_KEY set)');

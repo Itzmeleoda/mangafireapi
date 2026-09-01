@@ -97,9 +97,11 @@ function buildUrl(path: string): string {
       return u;
     }
     case 'zenrows': {
+      // Verified-working anti-CF combo: js_render + antibot + premium_proxy
       let u = `https://api.zenrows.com/v1/?apikey=${key}&url=${url}`;
       if (config.scraperRender) u += '&js_render=true';
       if (config.scraperPremium) u += '&premium_proxy=true';
+      if (config.scraperRender || config.scraperPremium) u += '&antibot=true';
       return u;
     }
     case 'scraperapi':
