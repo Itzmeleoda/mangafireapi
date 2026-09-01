@@ -1,0 +1,11 @@
+name = "mangafire-api"
+main = "worker/dist/index.js"
+compatibility_date = "2026-08-01"
+
+# Set secrets before deploying:
+#   npx wrangler secret put API_KEYS        # comma-separated mf-sk-... keys
+# Optional scraper-proxy fallback (only needed if Workers egress is challenged):
+#   npx wrangler secret put SCRAPER_API_KEY
+
+[vars]
+# Non-secret config can go here.

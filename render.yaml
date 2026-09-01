@@ -1,11 +1,24 @@
 services:
-    - type: web
-      name: aizen-manga-api
-      env: node
-      plan: free
-      buildCommand: npm install && npm run build
-      startCommand: npm start
-      envVars:
-        - key: NODE_ENV
-          value: production
-  
+  - type: web
+    name: mangafire-api
+    env: node
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    healthCheckPath: /
+    envVars:
+      - key: NODE_ENV
+        value: production
+      # Set these in the Render dashboard (Environment tab) — never commit keys.
+      # SCRAPER_API_KEY routes all traffic through ScraperAPI to bypass Cloudflare.
+      - key: SCRAPER_API_KEY
+        sync: false
+      # SCRAPER_RENDER=true executes JS (10 credits/req) — enable only if plain
+      # proxying still hits the Cloudflare challenge.
+      - key: SCRAPER_RENDER
+        sync: false
+      # SCRAPER_PREMIUM=true uses residential IPs (10 credits/req).
+      - key: SCRAPER_PREMIUM
+        sync: false
+      - key: MAX_RETRIES
+        value: "3"

@@ -1,5 +1,6 @@
 import createHttpError from 'http-errors';
   import { client } from '../utils/axiosClient';
+import { hrefToMangaId } from '../utils/normalize';
   import { AxiosError } from 'axios';
   import { load } from 'cheerio';
   import { ScrapedMangaGenre, MangaCategoryResult, MangaChapter } from '../types/parsers/index';
@@ -18,13 +19,14 @@ import createHttpError from 'http-errors';
       res.totalPages = (total > 0 && onPage > 0) ? Math.ceil(total / onPage) : 1;
       res.hasNextPage = page < res.totalPages;
       $('div.original.card-lg > div.unit').each((_, el) => {
-        const manga: MangaCategoryResult = { id: $(el).find('a.poster').attr('href')?.replace('/manga/','') || null, title: $(el).find('div.info > a').text().trim() || null, poster: $(el).find('a.poster > div > img').attr('src')?.trim() || null, type: $(el).find('div.info > div > span.type').text().trim() || null, chapters: [] };
+        const manga: MangaCategoryResult = { id: hrefToMangaId($(el).find('a.poster').attr('href')), title: $(el).find('div.info > a').text().trim() || null, poster: $(el).find('a.poster > div > img').attr('src')?.trim() || null, type: $(el).find('div.info > div > span.type').text().trim() || null, chapters: [] };
         $(el).find('ul.content[data-name="chap"] > li').each((_, ce) => { manga.chapters!.push({ url: $(ce).find('a').attr('href') || null, title: $(ce).find('a').attr('title') || null, chapter: $(ce).find('a > span:first-child').text().trim() || null, releaseDate: $(ce).find('a > span:last-child').text().trim() || null }); });
         res.mangaCategory.push(manga);
       });
       return res;
     } catch (err: any) {
       if (err instanceof AxiosError) throw createHttpError(err?.response?.status || 500, err?.response?.statusText || 'Something went wrong');
+      if (err?.status) throw err;
       throw createHttpError(500, err?.message);
     }
   }

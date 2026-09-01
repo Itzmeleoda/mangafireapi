@@ -1,11 +1,15 @@
 {
-  "name": "aizen-manga-api",
+  "name": "mangafire-api",
   "version": "1.0.0",
   "private": true,
   "scripts": {
     "build": "tsc",
     "start": "node dist/api/index.js",
-    "dev": "ts-node-dev --respawn --transpile-only api/index.ts"
+    "dev": "ts-node-dev --respawn --transpile-only api/index.ts",
+    "genkey": "node scripts/generate-key.mjs",
+    "worker:build": "node worker/build.mjs",
+    "worker:dev": "npm run worker:build && wrangler dev",
+    "worker:deploy": "npm run worker:build && wrangler deploy"
   },
   "engines": {
     "node": ">=18"
@@ -23,6 +27,8 @@
     "@types/http-errors": "^2.0.0",
     "@types/node": "^20.4.8",
     "ts-node-dev": "^2.0.0",
-    "typescript": "^5.1.6"
+    "typescript": "^5.1.6",
+    "esbuild": "^0.24.0",
+    "wrangler": "^3.90.0"
   }
 }
