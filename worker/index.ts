@@ -8,6 +8,8 @@
  *
  * Secrets (set with `wrangler secret put`):
  *   API_KEYS         comma-separated mf-sk-... keys (omit = open dev mode)
+ *   ADMIN_KEY        enables the dashboard's key generator (POST /admin/keys);
+ *                    keys it issues are HMAC-signed and need no storage
  *   SCRAPER_API_KEY  optional ScraperAPI fallback if egress IPs get blocked
  * Vars (wrangler.toml):
  *   RATE_LIMIT       requests/min per key (default 60)
@@ -24,9 +26,11 @@ import { cache, TTL } from '../src/lib/cache';
 import { parseMangaRef } from '../src/utils/normalize';
 import { configureFetchClient, client, isCloudflareBlock } from '../src/utils/fetchClient';
 import { MangaCategories } from '../src/types/manga';
+import { dashboardHtml } from './dashboard';
 
 export interface Env {
   API_KEYS?: string;
+  ADMIN_KEY?: string;
   SCRAPER_API_KEY?: string;
   SCRAPER_RENDER?: string;
   SCRAPER_PREMIUM?: string;
@@ -59,22 +63,82 @@ function keyMatches(candidate: string, keys: string[]): boolean {
   return false;
 }
 
+// ---------------------------------------------------------------------------
+// Signed keys (created from the dashboard; no storage required)
+//
+// Format: mf-sk-<base64url(payload)>.<base64url(HMAC-SHA256(payload, ADMIN_KEY))>
+// payload: { n: label, e: expiry epoch ms (0 = never), r: random hex }
+// ---------------------------------------------------------------------------
+
+function b64url(bytes: Uint8Array): string {
+  let s = '';
+  for (const b of bytes) s += String.fromCharCode(b);
+  return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function b64urlDecode(s: string): Uint8Array {
+  const bin = atob(s.replace(/-/g, '+').replace(/_/g, '/'));
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+async function hmacSha256(secret: string, message: string): Promise<Uint8Array> {
+  const enc = new TextEncoder();
+  const key = await crypto.subtle.importKey('raw', enc.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  return new Uint8Array(await crypto.subtle.sign('HMAC', key, enc.encode(message)));
+}
+
+async function createSignedKey(name: string, expiresInDays: number, secret: string): Promise<string> {
+  const rand = new Uint8Array(8);
+  crypto.getRandomValues(rand);
+  const payload = {
+    n: (name || 'key').slice(0, 40),
+    e: expiresInDays > 0 ? Date.now() + expiresInDays * 86_400_000 : 0,
+    r: b64url(rand),
+  };
+  const payloadB64 = b64url(new TextEncoder().encode(JSON.stringify(payload)));
+  const sig = b64url(await hmacSha256(secret, payloadB64));
+  return `mf-sk-${payloadB64}.${sig}`;
+}
+
+async function verifySignedKey(key: string, secret: string): Promise<boolean> {
+  const m = /^mf-sk-([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+)$/.exec(key);
+  if (!m) return false;
+  const expected = b64url(await hmacSha256(secret, m[1]));
+  if (expected.length !== m[2].length) return false;
+  let diff = 0;
+  for (let i = 0; i < expected.length; i++) diff |= expected.charCodeAt(i) ^ m[2].charCodeAt(i);
+  if (diff !== 0) return false;
+  try {
+    const payload = JSON.parse(new TextDecoder().decode(b64urlDecode(m[1])));
+    if (payload.e && Date.now() > payload.e) return false; // expired
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // Per-key sliding-window rate limiter (per-isolate, best effort).
 const buckets = new Map<string, { count: number; resetAt: number }>();
 
-function authenticate(
+async function authenticate(
   req: Request,
   env: Env
-): { ok: true; headers: Record<string, string> } | { ok: false; response: Response } {
+): Promise<{ ok: true; headers: Record<string, string> } | { ok: false; response: Response }> {
   const keys = parseKeys(env);
   const rateLimit = Math.max(1, parseInt(env.RATE_LIMIT || '60', 10));
-  if (keys.length === 0) return { ok: true, headers: {} };
+  if (keys.length === 0 && !env.ADMIN_KEY) return { ok: true, headers: {} };
 
   const url = new URL(req.url);
   const bearer = (req.headers.get('authorization') || '').replace(/^Bearer\s+/i, '').trim();
   const key = bearer || req.headers.get('x-api-key') || url.searchParams.get('api_key') || '';
 
-  if (!key || !keyMatches(key, keys)) {
+  const valid = key
+    ? keyMatches(key, keys) || (env.ADMIN_KEY ? await verifySignedKey(key, env.ADMIN_KEY) : false)
+    : false;
+
+  if (!valid) {
     return {
       ok: false,
       response: jsonError(
@@ -304,17 +368,39 @@ export default {
     }
 
     // Public health endpoint
-    if (url.pathname === '/' || url.pathname === '/health') {
+    if (url.pathname === '/health') {
       return json({
         status: 'ok',
         runtime: 'cloudflare-workers',
-        authRequired: parseKeys(env).length > 0,
+        authRequired: parseKeys(env).length > 0 || !!env.ADMIN_KEY,
         message: 'MangaFire API — try /api/home',
       });
     }
 
+    // Admin: create signed API keys (used by the dashboard).
+    if (url.pathname === '/admin/keys') {
+      if (!env.ADMIN_KEY) return jsonError(503, 'Key creation is disabled: set the ADMIN_KEY secret on this Worker.');
+      if (request.method !== 'POST') return jsonError(405, 'POST only');
+      const bearer = (request.headers.get('authorization') || '').replace(/^Bearer\s+/i, '').trim();
+      if (!bearer || !keyMatches(bearer, [env.ADMIN_KEY])) {
+        return jsonError(401, 'Invalid admin secret.', { 'WWW-Authenticate': 'Bearer realm="mangafire-admin"' });
+      }
+      let body: { name?: string; expiresInDays?: number } = {};
+      try { body = await request.json(); } catch { /* empty body is fine */ }
+      const days = Math.min(365, Math.max(0, Math.floor(body.expiresInDays || 0)));
+      const key = await createSignedKey(String(body.name || ''), days, env.ADMIN_KEY);
+      return json({ key, expiresInDays: days || null });
+    }
+
+    // Dashboard UI (public page; key creation inside is admin-secret gated)
+    if (url.pathname === '/' && request.method === 'GET') {
+      return new Response(dashboardHtml(url.host, !!env.ADMIN_KEY), {
+        headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' },
+      });
+    }
+
     // Everything else requires a key (when configured)
-    const auth = authenticate(request, env);
+    const auth = await authenticate(request, env);
     if (!auth.ok) return auth.response;
 
     const matched = matchRoute(url.pathname);
