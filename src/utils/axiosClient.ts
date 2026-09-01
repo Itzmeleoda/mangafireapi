@@ -4,6 +4,8 @@ import http from 'http';
 import https from 'https';
 
 const SCRAPER_KEY = process.env.SCRAPER_API_KEY;
+// scraperapi (default) | scrapingbee | zenrows
+const SCRAPER_PROVIDER = (process.env.SCRAPER_PROVIDER || 'scraperapi').toLowerCase();
 // render=true makes ScraperAPI execute JavaScript (needed for tougher Cloudflare checks, costs 10 credits/request)
 const SCRAPER_RENDER = process.env.SCRAPER_RENDER === 'true';
 // premium=true routes through residential proxies (costs 10 credits/request)
@@ -46,12 +48,18 @@ export const client = axios.create({
 export function isCloudflareBlock(status: number | undefined, data: unknown): boolean {
   if (status === 429) return false; // rate limit, handled by retry
   const body = typeof data === 'string' ? data : '';
-  const looksLikeChallenge =
-    body.length > 0 &&
-    body.length < 30000 &&
-    /cf-chl|cf-challenge|challenge-platform|just a moment|attention required!|cloudflare|enable javascript and cookies/i.test(
+  if (!body) return false;
+  // Strong markers: present in challenge pages of ANY size (no length cap).
+  if (
+    /cdn-cgi\/challenge-platform|window\._cf_chl_opt|cf_chl_opt|challenge-platform\/h\/|<title>just a moment\.{0,3}<\/title>/i.test(
       body
-    );
+    )
+  )
+    return true;
+  // Weaker markers only on small bodies, to avoid false positives on real pages.
+  const looksLikeChallenge =
+    body.length < 30000 &&
+    /cf-chl|cf-challenge|just a moment|attention required!|enable javascript and cookies/i.test(body);
   if (looksLikeChallenge) return true;
   // A bare 403 from a datacenter IP on this site is practically always Cloudflare
   if (status === 403 && body.length < 30000 && /cloudflare|access denied|blocked/i.test(body)) return true;
@@ -69,10 +77,22 @@ if (SCRAPER_KEY) {
     const base = (config.baseURL || 'https://mangafire.to').replace(/\/$/, '');
     const path = config.url || '';
     const full = path.startsWith('http') ? path : `${base}${path}`;
+    const url = encodeURIComponent(full);
     config.baseURL = '';
-    let proxyUrl = `http://api.scraperapi.com?api_key=${SCRAPER_KEY}&keep_headers=true&url=${encodeURIComponent(full)}`;
-    if (SCRAPER_RENDER) proxyUrl += '&render=true';
-    if (SCRAPER_PREMIUM) proxyUrl += '&premium=true';
+    let proxyUrl: string;
+    if (SCRAPER_PROVIDER === 'scrapingbee') {
+      proxyUrl = `https://app.scrapingbee.com/api/v1?api_key=${SCRAPER_KEY}&url=${url}`;
+      if (SCRAPER_RENDER) proxyUrl += '&render_js=true';
+      if (SCRAPER_PREMIUM) proxyUrl += '&premium_proxy=true';
+    } else if (SCRAPER_PROVIDER === 'zenrows') {
+      proxyUrl = `https://api.zenrows.com/v1/?apikey=${SCRAPER_KEY}&url=${url}`;
+      if (SCRAPER_RENDER) proxyUrl += '&js_render=true';
+      if (SCRAPER_PREMIUM) proxyUrl += '&premium_proxy=true';
+    } else {
+      proxyUrl = `http://api.scraperapi.com?api_key=${SCRAPER_KEY}&keep_headers=true&url=${url}`;
+      if (SCRAPER_RENDER) proxyUrl += '&render=true';
+      if (SCRAPER_PREMIUM) proxyUrl += '&premium=true';
+    }
     config.url = proxyUrl;
     return config;
   });

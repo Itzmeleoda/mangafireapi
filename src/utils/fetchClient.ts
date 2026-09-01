@@ -14,8 +14,11 @@ import createHttpError from 'http-errors';
  * called once by the worker entry with the Worker's env bindings.
  */
 
+export type ScraperProvider = 'scraperapi' | 'scrapingbee' | 'zenrows';
+
 export interface FetchClientConfig {
   scraperApiKey?: string;
+  scraperProvider?: ScraperProvider;
   scraperRender?: boolean;
   scraperPremium?: boolean;
   maxRetries?: number;
@@ -49,12 +52,20 @@ const BASE_URL = 'https://mangafire.to';
 export function isCloudflareBlock(status: number | undefined, data: unknown): boolean {
   if (status === 429) return false;
   const body = typeof data === 'string' ? data : '';
-  const looksLikeChallenge =
-    body.length > 0 &&
-    body.length < 30000 &&
-    /cf-chl|cf-challenge|challenge-platform|just a moment|attention required!|cloudflare|enable javascript and cookies/i.test(
+  if (!body) return false;
+  // Strong markers: present in challenge pages of ANY size (no length cap).
+  // The old 30KB cap let newer, larger managed-challenge pages slip through
+  // and be parsed as "real" (empty) pages.
+  if (
+    /cdn-cgi\/challenge-platform|window\._cf_chl_opt|cf_chl_opt|challenge-platform\/h\/|<title>just a moment\.{0,3}<\/title>/i.test(
       body
-    );
+    )
+  )
+    return true;
+  // Weaker markers only on small bodies, to avoid false positives on real pages.
+  const looksLikeChallenge =
+    body.length < 30000 &&
+    /cf-chl|cf-challenge|just a moment|attention required!|enable javascript and cookies/i.test(body);
   if (looksLikeChallenge) return true;
   if (status === 403 && body.length < 30000 && /cloudflare|access denied|blocked/i.test(body)) return true;
   return false;
@@ -75,10 +86,32 @@ export interface GetOptions {
 function buildUrl(path: string): string {
   const full = path.startsWith('http') ? path : `${BASE_URL}${path}`;
   if (!config.scraperApiKey) return full;
-  let proxyUrl = `http://api.scraperapi.com?api_key=${config.scraperApiKey}&keep_headers=true&url=${encodeURIComponent(full)}`;
-  if (config.scraperRender) proxyUrl += '&render=true';
-  if (config.scraperPremium) proxyUrl += '&premium=true';
-  return proxyUrl;
+  const key = config.scraperApiKey;
+  const url = encodeURIComponent(full);
+  switch (config.scraperProvider || 'scraperapi') {
+    case 'scrapingbee': {
+      // app.scrapingbee.com — render_js + premium_proxy are the anti-CF knobs
+      let u = `https://app.scrapingbee.com/api/v1?api_key=${key}&url=${url}`;
+      if (config.scraperRender) u += '&render_js=true';
+      if (config.scraperPremium) u += '&premium_proxy=true';
+      return u;
+    }
+    case 'zenrows': {
+      let u = `https://api.zenrows.com/v1/?apikey=${key}&url=${url}`;
+      if (config.scraperRender) u += '&js_render=true';
+      if (config.scraperPremium) u += '&premium_proxy=true';
+      return u;
+    }
+    case 'scraperapi':
+    default: {
+      // keep_headers=true is REQUIRED, otherwise ScraperAPI drops the browser
+      // headers above and Cloudflare instantly flags the request as a bot.
+      let u = `http://api.scraperapi.com?api_key=${key}&keep_headers=true&url=${url}`;
+      if (config.scraperRender) u += '&render=true';
+      if (config.scraperPremium) u += '&premium=true';
+      return u;
+    }
+  }
 }
 
 const CLOUDFLARE_MSG =

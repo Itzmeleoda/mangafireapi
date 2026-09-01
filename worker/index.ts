@@ -24,7 +24,7 @@ import { getChapters, getChapterImages, getVolumes } from '../src/parsers/readPa
 import scrapeLatestPage from '../src/parsers/latestPage';
 import { cache, TTL } from '../src/lib/cache';
 import { parseMangaRef } from '../src/utils/normalize';
-import { configureFetchClient, client, isCloudflareBlock } from '../src/utils/fetchClient';
+import { configureFetchClient, client, isCloudflareBlock, ScraperProvider } from '../src/utils/fetchClient';
 import { MangaCategories } from '../src/types/manga';
 import { dashboardHtml } from './dashboard';
 
@@ -32,6 +32,7 @@ export interface Env {
   API_KEYS?: string;
   ADMIN_KEY?: string;
   SCRAPER_API_KEY?: string;
+  SCRAPER_PROVIDER?: string;
   SCRAPER_RENDER?: string;
   SCRAPER_PREMIUM?: string;
   RATE_LIMIT?: string;
@@ -357,6 +358,7 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     configureFetchClient({
       scraperApiKey: env.SCRAPER_API_KEY,
+      scraperProvider: (env.SCRAPER_PROVIDER || 'scraperapi') as ScraperProvider,
       scraperRender: env.SCRAPER_RENDER === 'true',
       scraperPremium: env.SCRAPER_PREMIUM === 'true',
     });

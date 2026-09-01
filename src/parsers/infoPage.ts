@@ -49,6 +49,15 @@ async function scrapeMangaInfo(id: string): Promise<ScrapedManga> {
         poster: $(el).find('.poster img').attr('src')?.trim() || null,
       });
     });
+    if (!res.mangaInfo.title) {
+      // Parsing succeeded but found nothing: the page was almost certainly a
+      // Cloudflare challenge (or the site changed). Surface a clear error
+      // instead of a misleading 200 with empty fields.
+      throw createHttpError(
+        503,
+        'MangaFire returned an empty title page — the upstream request was likely blocked by Cloudflare. Set SCRAPER_API_KEY in your Worker secrets.'
+      );
+    }
     return res;
   } catch (err: any) {
     if (err instanceof AxiosError) throw createHttpError(err?.response?.status || 500, err?.response?.statusText || 'Something went wrong');

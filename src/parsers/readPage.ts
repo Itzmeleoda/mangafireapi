@@ -38,8 +38,15 @@ export async function getChapters(mangaId: string, language?: string): Promise<C
     const response = await client.get(`/ajax/read/${id}/chapter/${language.toLowerCase()}`, {
       headers: { 'X-Requested-With': 'XMLHttpRequest' },
     });
-    const json: { result: { html: string } } = response.data;
-    const $ = load(json.result.html);
+    const json = (response.data || {}) as { result?: { html?: string } };
+    const html = json?.result?.html ?? '';
+    if (!html) {
+      throw createHttpError(
+        503,
+        'MangaFire returned no chapter list — the upstream request was likely blocked. Set SCRAPER_API_KEY in your Worker secrets.'
+      );
+    }
+    const $ = load(html);
     const chapters: Chapter[] = [];
     $('li').each((_, li) => {
       const a = $(li).find('a');
@@ -64,10 +71,20 @@ export async function getChapterImages(chapterId: string): Promise<string[]> {
     const response = await client.get(`/ajax/read/chapter/${chapterId}`, {
       headers: { 'X-Requested-With': 'XMLHttpRequest' },
     });
-    const json: { result: { images: string[][] } } = response.data;
+    const json = (response.data || {}) as { result?: { images?: string[][] } };
+    // Guard every level: when the upstream is Cloudflare-blocked (or the site
+    // changes shape), result/images are undefined and a bare `.images` read
+    // used to crash the whole route with a 500 TypeError.
+    const images = json?.result?.images ?? [];
+    if (images.length === 0) {
+      throw createHttpError(
+        503,
+        'MangaFire returned no images for this chapter — the upstream request was likely blocked. Set SCRAPER_API_KEY (ScraperAPI / ScrapingBee / ZenRows) in your Worker secrets.'
+      );
+    }
     // Each entry is [url, width, height] — return the (token-signed) URLs.
     // These URLs expire; clients should fetch them promptly.
-    return json.result.images.map(img => img[0]);
+    return images.map(img => img[0]).filter(Boolean);
   } catch (err: any) {
     if (err instanceof AxiosError) throw createHttpError(err?.response?.status || 500, err?.response?.statusText || 'Something went wrong');
     if (err?.status) throw err;
@@ -102,8 +119,15 @@ export async function getVolumes(mangaId: string, language: string = 'en'): Prom
     const response = await client.get(`/ajax/manga/${actualId}/volume/${language.toLowerCase()}`, {
       headers: { 'X-Requested-With': 'XMLHttpRequest' },
     });
-    const json: { result: string } = response.data;
-    const $ = load(json.result);
+    const json = (response.data || {}) as { result?: string };
+    const html = typeof json?.result === 'string' ? json.result : '';
+    if (!html) {
+      throw createHttpError(
+        503,
+        'MangaFire returned no volume list — the upstream request was likely blocked. Set SCRAPER_API_KEY in your Worker secrets.'
+      );
+    }
+    const $ = load(html);
     const volumes: Volume[] = [];
     $('.unit').each((_, el) => {
       const img = $(el).find('img').attr('src');
