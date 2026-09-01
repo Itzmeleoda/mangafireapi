@@ -1,125 +1,185 @@
-# MangaFire API
+# MangaFire API & MangaBot Integration Guide
 
-A REST API that scrapes manga data from MangaFire.to, built to run on **Render**.
+A high-performance, edge-native REST API for [MangaFire](https://mangafire.to), built for **Cloudflare Workers** (100% free tier: 100,000 requests/day, no credit card required). It bypasses Cloudflare challenges, consumes MangaFire's internal JSON endpoints, and features built-in API key authentication, rate limiting, and an interactive admin dashboard.
 
-MangaFire sits behind Cloudflare and blocks datacenter IPs (Render included). This API solves that by optionally routing all scraping through [ScraperAPI](https://www.scraperapi.com/) — set one environment variable and the Cloudflare challenge is handled server-side, so your app only ever talks to this fast JSON API.
+---
 
-## MangaFire URL formats
+## 🚀 Features
 
-MangaFire migrated its URLs (`/manga/{slug}.{id}` → `/title/{id}-{slug}`). All formats are accepted everywhere a manga id is expected:
+- **Edge-Fast Performance:** Deployed globally on Cloudflare Workers.
+- **Internal JSON API:** Directly queries MangaFire's high-speed catalog and chapter endpoints.
+- **Zero-Database Key Management:** Cryptographically signed API keys (`mf-sk-...`) verified statelessly via HMAC-SHA256 — no database or KV store needed!
+- **Built-in Admin Dashboard & Playground:** Visit your worker's root URL (`/`) to generate keys, test endpoints live, and copy ready-made client code snippets.
+- **Auto API Key Generation:** Programmatically generate API keys on the fly from your bot or onboarding flow using your admin secret.
 
-| Form | Example |
-|---|---|
-| Full URL (current) | `https://mangafire.to/title/lx8vq-reborn-as-the-overpowered-genius-lord` |
-| Current slug | `lx8vq-reborn-as-the-overpowered-genius-lord` |
-| Legacy slug | `reborn-as-the-overpowered-genius-lord.lx8vq` |
-| Bare id | `lx8vq` |
+---
 
-In URL path params (e.g. `/api/manga/:id`) full URLs can't be used because of the slashes — use `/api/resolve?url=...` first, or pass the slug/id form.
+## 🛠️ 1. Deployment & Setup
 
-## Deploy on Render
+1. **Clone & Push to GitHub** (if not already done):
+   ```bash
+   git clone https://github.com/Itzmeleoda/mangafireapi.git
+   cd mangafireapi
+   ```
 
-1. Fork/clone this repo and push it to your GitHub.
-2. In Render: **New → Web Service →** connect the repo. Render auto-detects `render.yaml`:
-   - Build: `npm install && npm run build`
-   - Start: `npm start`
-3. Add environment variables (Render dashboard → Environment):
+2. **Install Dependencies & Test Locally**:
+   ```bash
+   npm install
+   npm run worker:dev
+   ```
 
-| Variable | Required | Purpose |
+3. **Deploy to Cloudflare Workers**:
+   ```bash
+   npx wrangler login
+   npx wrangler secret put ADMIN_KEY     # Enter a secure secret for minting keys
+   npx wrangler secret put API_KEYS      # (Optional) Pre-existing comma-separated keys
+   npm run worker:deploy
+   ```
+
+4. **Verify Live Deployment**:
+   Open `https://mangafire-api.<your-subdomain>.workers.dev/` in your browser to access the interactive admin dashboard and API playground.
+
+---
+
+## 🔑 2. Auto API Key Generation
+
+To prevent manual key creation, your backend or bot can programmatically generate instant API keys by calling the `/admin/keys` endpoint authenticated with your `ADMIN_KEY` secret.
+
+### Request
+```bash
+POST https://mangafire-api.<your-subdomain>.workers.dev/admin/keys
+Content-Type: application/json
+Authorization: Bearer YOUR_ADMIN_KEY
+
+{
+  "label": "MangaBot Production - User 12345",
+  "expiresInDays": 90
+}
+```
+
+### Response
+```json
+{
+  "success": true,
+  "apiKey": "mf-sk-eyJhbGciOiJIUzI1Ni..._signed_sig",
+  "keyInfo": {
+    "label": "MangaBot Production - User 12345",
+    "createdAt": 1718000000000,
+    "expiresAt": 1725776000000
+  }
+}
+```
+
+### Example (Node.js / Bot Backend)
+```javascript
+async function generateUserApiKey(userLabel) {
+  const res = await fetch('https://mangafire-api.your-subdomain.workers.dev/admin/keys', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${process.env.ADMIN_KEY}`
+    },
+    body: JSON.stringify({
+      label: userLabel,
+      expiresInDays: 365 // optional: 7, 30, 90, 365, or omit for never
+    })
+  });
+  
+  const data = await res.json();
+  if (!data.success) throw new Error(data.error);
+  return data.apiKey; // Use this key for the user's bot requests
+}
+```
+
+---
+
+## 🤖 3. Implementing the API in MangaBot
+
+All protected API endpoints require an API key passed via either:
+- **Header:** `x-api-key: mf-sk-...` (Recommended)
+- **Query Parameter:** `?api_key=mf-sk-...`
+
+### Core MangaBot Workflow
+
+1. **Search Manga** (`GET /api/search/:keyword`)
+2. **Resolve / Get Details** (`GET /api/manga/:id`)
+3. **Get Chapters** (`GET /api/manga/:id/chapters/:lng`)
+4. **Get Chapter Pages** (`GET /api/chapter/:chapterId`)
+
+### JavaScript / TypeScript Example (MangaBot Client)
+
+```javascript
+const API_BASE = 'https://mangafire-api.your-subdomain.workers.dev';
+const API_KEY = 'mf-sk-your-generated-key';
+
+async function fetchFromApi(endpoint) {
+  const res = await fetch(`${API_BASE}${endpoint}`, {
+    headers: { 'x-api-key': API_KEY }
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `HTTP ${res.status}`);
+  }
+  const json = await res.json();
+  return json.result || json;
+}
+
+// 1. Search for manga by title
+async function searchManga(query) {
+  return await fetchFromApi(`/api/search/${encodeURIComponent(query)}`);
+}
+
+// 2. Get manga details & chapters
+async function getMangaDetails(mangaId) {
+  // mangaId can be slug like 'lx8vq-reborn-as-the-overpowered-genius-lord' or bare id 'lx8vq'
+  return await fetchFromApi(`/api/manga/${mangaId}`);
+}
+
+// 3. Get chapter list for English ('en')
+async function getChapters(mangaId, lang = 'en') {
+  return await fetchFromApi(`/api/manga/${mangaId}/chapters/${lang}`);
+}
+
+// 4. Get readable image URLs for a chapter
+async function getChapterPages(chapterId) {
+  return await fetchFromApi(`/api/chapter/${chapterId}`);
+}
+
+// Example Usage in MangaBot command handler:
+async function handleUserSearch(botMessage, query) {
+  try {
+    const results = await searchManga(query);
+    botMessage.reply(`Found ${results.length} manga! Top result: ${results[0].title}`);
+  } catch (err) {
+    botMessage.reply(`Error searching manga: ${err.message}`);
+  }
+}
+```
+
+---
+
+## 📡 4. Endpoint Reference
+
+| Endpoint | Method | Description |
 |---|---|---|
-| `SCRAPER_API_KEY` | Yes (on Render) | ScraperAPI key — bypasses Cloudflare. Free tier: 1,000 credits. |
-| `SCRAPER_RENDER` | No | `true` = full JS rendering (10 credits/request). Enable only if you still get 503 Cloudflare errors. |
-| `SCRAPER_PREMIUM` | No | `true` = residential proxies (10 credits/request). |
-| `MAX_RETRIES` | No | Retries on 403/429/5xx with backoff (default 3). |
+| `GET /` | `GET` | Interactive Admin Dashboard & API Playground |
+| `GET /health` | `GET` | Health check (`{ ok: true, authRequired: true }`) |
+| `POST /admin/keys` | `POST` | Mint a new signed API key (requires `Authorization: Bearer ADMIN_KEY`) |
+| `GET /api/home` | `GET` | Home page trending / most viewed / recently updated |
+| `GET /api/search/:keyword?page=1` | `GET` | Search manga by keyword |
+| `GET /api/category/:category?page=1` | `GET` | Browse by category (`manga`, `manhwa`, `manhua`, etc.) |
+| `GET /api/genre/:genre?page=1` | `GET` | Browse by genre |
+| `GET /api/manga/:id` | `GET` | Manga details, alternative titles, description, stats |
+| `GET /api/manga/:id/chapters` | `GET` | Available translation languages |
+| `GET /api/manga/:id/chapters/:lng` | `GET` | Full chapter list for a specific language (e.g. `en`) |
+| `GET /api/chapter/:chapterId` | `GET` | Direct high-res reader page image URLs for a chapter |
+| `GET /api/resolve?url=...` | `GET` | Resolve any MangaFire URL or slug to standard IDs |
+| `GET /proxy-image?url=...` | `GET` | CORS image proxy with required MangaFire headers |
 
-4. Verify the bypass works before trusting parser output:
+---
 
-```
-GET https://<your-app>.onrender.com/api/debug/fetch?path=/home
-```
+## 🔒 Security Best Practices
 
-If `cloudflareBlocked` is `true`, enable `SCRAPER_RENDER=true` (and/or `SCRAPER_PREMIUM=true`) and check again.
-
-> **Render free tier note:** services sleep after 15 min idle; the first request after sleep takes ~30–60s (cold start). The in-memory cache also resets on restart — that's expected.
-
-## Endpoints
-
-| Endpoint | Description |
-|---|---|
-| `GET /api/resolve?url=...` | Parse any MangaFire URL/slug/id → `{ id, slug, mangaId, pagePath, info, chapters }` |
-| `GET /api/debug/fetch?path=/home` | Diagnostics: status, bytes, cloudflareBlocked, HTML snippet |
-| `GET /api/home` | Home page — trending, most viewed, recently updated |
-| `GET /api/search/:keyword?page=1` | Search manga by keyword |
-| `GET /api/category/:category?page=1` | Browse by category (manga, manhwa, manhua, etc.) |
-| `GET /api/genre/:genre?page=1` | Browse by genre |
-| `GET /api/manga/:id` | Manga details |
-| `GET /api/manga/:id/chapters` | Available languages |
-| `GET /api/manga/:id/chapters/:lng` | Chapter list for a language |
-| `GET /api/chapter/:chapterId` | Chapter image URLs (token-signed — they expire, fetch promptly) |
-| `GET /api/volumes/:id?lang=en` | Volume list |
-| `GET /api/updated?page=1` | Recently updated manga |
-| `GET /api/newest?page=1` | Newest manga |
-| `GET /api/added?page=1` | Recently added manga |
-| `GET /api/cache/stats` | Cache statistics |
-| `GET /proxy-image?url=...` | Image proxy (CORS bypass, sets MangaFire referer) |
-
-## Typical flow from your app
-
-```
-# 1. Resolve the link the user pasted
-GET /api/resolve?url=https://mangafire.to/title/lx8vq-reborn-as-the-overpowered-genius-lord
-# → { "id": "lx8vq", "mangaId": "lx8vq-reborn-as-the-overpowered-genius-lord", ... }
-
-# 2. Get available languages
-GET /api/manga/lx8vq-reborn-as-the-overpowered-genius-lord/chapters
-# → [{ "id": "en", "title": "English", "chapters": "145 Chapters" }, ...]
-
-# 3. Get the chapter list
-GET /api/manga/lx8vq-reborn-as-the-overpowered-genius-lord/chapters/en
-# → [{ "number": "1", "title": "Chap 1", "chapterId": "3770773", ... }, ...]
-
-# 4. Get page images for a chapter
-GET /api/chapter/3770773
-# → ["https://s209.mbfimg.org/...?token=...", ...]
-```
-
-## Local development
-
-```bash
-npm install
-npm run dev                       # direct mode (works if your IP isn't Cloudflare-blocked)
-SCRAPER_API_KEY=xxx npm run dev   # proxied mode
-```
-
-## Troubleshooting
-
-| Symptom | Cause | Fix |
-|---|---|---|
-| `503 Blocked by Cloudflare challenge` | No/ineffective proxy | Set `SCRAPER_API_KEY`; if it persists set `SCRAPER_RENDER=true` |
-| Fields are null/empty but status 200 | MangaFire changed its HTML | Use `/api/debug/fetch` to inspect the raw page and update the cheerio selectors in `src/parsers/` |
-| Chapter image URLs 403 after a while | Signed URLs expired | Re-call `/api/chapter/:chapterId`; don't cache image URLs client-side for long |
-
-## Deploy to Cloudflare Workers (free)
-
-The free tier covers 100,000 requests/day — no credit card required. Workers
-requests egress from Cloudflare's own network, which often passes MangaFire's
-Cloudflare checks that block other datacenter IPs.
-
-```bash
-npm install                 # installs wrangler + esbuild
-npm run worker:dev          # local test at http://localhost:8787
-npx wrangler login          # one-time browser login
-npx wrangler secret put API_KEYS   # paste your mf-sk-... key(s)
-npm run worker:deploy       # live at https://mangafire-api.<you>.workers.dev
-```
-
-After deploying, verify the bypass actually works from Cloudflare's network:
-
-```bash
-curl "https://mangafire-api.<you>.workers.dev/api/debug/fetch?path=/home&api_key=<key>"
-# "cloudflareBlocked": false  -> you're live with no proxy needed
-# "cloudflareBlocked": true   -> also set: npx wrangler secret put SCRAPER_API_KEY
-```
-
-For local dev, copy `.dev.vars.example` to `.dev.vars` and put your test key in it.
-The same codebase still deploys to Vercel (`api/index.ts`) unchanged.
+1. **Keep `ADMIN_KEY` Secret:** Never expose your `ADMIN_KEY` in frontend code or public repositories. It should only reside in Cloudflare Worker Secrets (`wrangler secret put ADMIN_KEY`) and your secure bot backend environment variables.
+2. **Distribute User Keys:** Use auto-generation (`POST /admin/keys`) on your backend to issue scoped, labeled user keys dynamically when users sign up or connect their bot session.
+3. **Signed Key Expiry:** Set appropriate expiration intervals (`expiresInDays`) when minting keys to automatically invalidate inactive or old bot sessions.
