@@ -153,6 +153,20 @@ async function get<T = unknown>(path: string, opts: GetOptions = {}): Promise<Cl
         throw createHttpError(503, CLOUDFLARE_MSG);
       }
 
+      // When the proxy is configured, a non-2xx from the proxy itself is a
+      // config/billing error (ZenRows: 401 bad key, 402 no credits, 422 bad
+      // params). Surface it verbatim instead of silently passing the error
+      // body to the parsers, which would report a misleading "empty page".
+      if (config.scraperApiKey && (res.status < 200 || res.status >= 300)) {
+        const snippet = text.slice(0, 300).replace(/\s+/g, ' ').trim();
+        const proxyMsg = `${config.scraperProvider || 'scraperapi'} proxy returned HTTP ${res.status}: ${snippet || '(empty body)'}`;
+        if ([429, 500, 502, 503].includes(res.status) && attempt < maxRetries) {
+          lastError = createHttpError(502, proxyMsg);
+          continue;
+        }
+        throw createHttpError(502, proxyMsg);
+      }
+
       // Retry transient / anti-bot statuses
       if ([403, 429, 500, 502, 503].includes(res.status) && attempt < maxRetries) {
         lastError = createHttpError(res.status, `Upstream returned ${res.status}`);
@@ -181,3 +195,11 @@ async function get<T = unknown>(path: string, opts: GetOptions = {}): Promise<Cl
 }
 
 export const client = { get };
+
+/** Which scraper proxy (if any) the client is configured with. */
+export function getProxyInfo(): { configured: boolean; provider: string } {
+  return {
+    configured: !!config.scraperApiKey,
+    provider: config.scraperProvider || 'scraperapi',
+  };
+}

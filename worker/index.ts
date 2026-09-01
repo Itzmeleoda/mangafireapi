@@ -24,7 +24,7 @@ import { getChapters, getChapterImages, getVolumes } from '../src/parsers/readPa
 import scrapeLatestPage from '../src/parsers/latestPage';
 import { cache, TTL } from '../src/lib/cache';
 import { parseMangaRef } from '../src/utils/normalize';
-import { configureFetchClient, client, isCloudflareBlock, ScraperProvider } from '../src/utils/fetchClient';
+import { configureFetchClient, client, isCloudflareBlock, getProxyInfo, ScraperProvider } from '../src/utils/fetchClient';
 import { MangaCategories } from '../src/types/manga';
 import { dashboardHtml } from './dashboard';
 
@@ -255,6 +255,7 @@ const routes: Route[] = [
       status: r.status,
       bytes: body.length,
       cloudflareBlocked: isCloudflareBlock(r.status, body),
+      proxy: getProxyInfo(),
       snippet: body.slice(0, 500),
     });
   }),
